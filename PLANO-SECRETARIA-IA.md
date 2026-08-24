@@ -346,14 +346,27 @@ Só depois adicionar monitoramento de conversas e Fathom. Isso reduz o risco de 
 - **Confirmações:** leitura automática; escrita com confirmação; exclusão, cancelamento e mensagens para terceiros sempre com confirmação.
 - **Ambientes:** desenvolvimento local inicialmente, com deploy preparado para `sofia.2ads.com.br`.
 
-## 15. Pendências para iniciar a implementação
+## 15. Decisões técnicas confirmadas
 
-1. Definir o framework/runtime do backend e do chat web.
-2. Definir qual modelo Groq será o padrão e quais modelos do OpenRouter serão fallback.
-3. Definir timezone, horário de silêncio e política de retenção.
-4. Confirmar se as conexões ClickUp, Notion e Google serão OAuth ou tokens pessoais no MVP.
-5. Confirmar o nome da instância Evolution API e o formato atual dos webhooks.
-6. Confirmar se o domínio `sofia.2ads.com.br` apontará para a VPS e quais subdomínios serão usados para API/chat/webhooks.
-7. Definir se as tarefas extraídas de reuniões serão apenas sugeridas ou criadas após confirmação.
+- **Backend:** Python.
+- **Framework recomendado:** FastAPI para API, webhooks e documentação OpenAPI.
+- **Frontend:** React, preferencialmente com Vite no MVP.
+- **Banco relacional e vetorial:** PostgreSQL com pgvector.
+- **Domínios de produção:**
+  - `sofia.2ads.com.br` — chat web;
+  - `api.sofia.2ads.com.br` — API/backend;
+  - `hooks.sofia.2ads.com.br` — webhooks.
+- **Ambiente local:** os domínios devem ser variáveis de ambiente; o desenvolvimento não pode depender de DNS público.
+- **Filas e jobs:** Redis, com worker Python separado do processo HTTP.
+- **IA:** Groq e OpenRouter atrás de uma interface única de provedor.
+
+## 16. Pendências para iniciar a implementação
+
+1. Definir qual modelo Groq será o padrão e quais modelos do OpenRouter serão fallback.
+2. Definir timezone, horário de silêncio e política de retenção.
+3. Confirmar se as conexões ClickUp, Notion e Google serão OAuth ou tokens pessoais no MVP.
+4. Confirmar o nome da instância Evolution API e o formato atual dos webhooks.
+5. Definir se as tarefas extraídas de reuniões serão apenas sugeridas ou criadas após confirmação.
+6. Confirmar se a VPS terá Docker Compose e como os serviços existentes estão nomeados na rede do Traefik.
 
 A recomendação permanece: **single-user, confirmação para toda escrita, retenção configurável e configuração por ambiente**.
