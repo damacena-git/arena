@@ -6,3 +6,4 @@ asyncpg==0.30.0
 redis==5.2.1
 httpx==0.28.1
 python-multipart==0.0.20
+itsdangerous==2.2.0

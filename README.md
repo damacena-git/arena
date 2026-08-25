@@ -31,6 +31,24 @@ A Sofia usa Groq por padrão e faz fallback para OpenRouter quando configurado. 
 
 A resposta da API informa `provider` e `model`, e o chat exibe essa informação abaixo da resposta. O botão de microfone permite enviar um arquivo de áudio de até 25 MB. A transcrição é feita pelo modelo `GROQ_TRANSCRIPTION_MODEL` e enviada à Sofia para gerar a resposta.
 
+## Conectar o Google Calendar
+
+1. No Google Cloud Console, crie um projeto e ative a **Google Calendar API**.
+2. Crie credenciais OAuth 2.0 do tipo **Aplicativo da Web**.
+3. Adicione este URI de redirecionamento autorizado no ambiente local:
+   `http://localhost:8000/api/v1/integrations/google/callback`
+4. Preencha o `.env`:
+
+```env
+GOOGLE_CLIENT_ID=seu-client-id
+GOOGLE_CLIENT_SECRET=seu-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/integrations/google/callback
+```
+
+5. Reinicie a API e abra **Configuração → Conectar agenda**.
+
+A conexão local fica temporariamente em memória nesta etapa. Ela será persistida e criptografada no PostgreSQL antes do uso em produção. O endpoint inicial de consulta é `GET /api/v1/integrations/google/events`.
+
 ## Domínios de produção
 
 - `sofia.2ads.com.br` — frontend

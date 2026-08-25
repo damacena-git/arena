@@ -13,6 +13,11 @@ ai_client = AIClient(settings)
 # Memória curta temporária; será substituída pela persistência no PostgreSQL.
 conversation_histories: dict[str, list[dict[str, str]]] = {}
 MAX_HISTORY_MESSAGES = 12
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_CALENDAR_URL = "https://www.googleapis.com/calendar/v3"
+google_oauth_states: set[str] = set()
+google_tokens: dict[str, dict] = {}
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -119,6 +124,88 @@ async def send_audio_message(
         model=model,
         transcription=transcript,
     )
+
+
+@app.get("/api/v1/integrations/google/start", tags=["integrations"])
+async def google_start() -> RedirectResponse:
+    if not settings.google_client_id or not settings.google_client_secret:
+        return RedirectResponse(url="/api/v1/integrations/google/status?error=missing_credentials", status_code=303)
+    state = secrets.token_urlsafe(32)
+    google_oauth_states.add(state)
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.google_redirect_uri,
+        "response_type": "code",
+        "scope": "https://www.googleapis.com/auth/calendar",
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{urlencode(params)}")
+
+
+@app.get("/api/v1/integrations/google/callback", tags=["integrations"])
+async def google_callback(code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
+    if error or not code or not state or state not in google_oauth_states:
+        return RedirectResponse(url="/api/v1/integrations/google/status?connected=false", status_code=303)
+    google_oauth_states.discard(state)
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "redirect_uri": settings.google_redirect_uri,
+            "grant_type": "authorization_code",
+        })
+    if response.status_code >= 400:
+        return RedirectResponse(url="/api/v1/integrations/google/status?connected=false", status_code=303)
+    token = response.json()
+    token["expires_at"] = datetime.now(timezone.utc).timestamp() + token.get("expires_in", 3600)
+    google_tokens["default"] = token
+    return RedirectResponse(url=f"{settings.app_url}/?google=connected", status_code=303)
+
+
+@app.get("/api/v1/integrations/google/status", tags=["integrations"])
+async def google_status(error: str | None = None) -> dict[str, bool | str | None]:
+    return {"connected": "default" in google_tokens, "error": error}
+
+
+async def google_access_token() -> str | None:
+    token = google_tokens.get("default")
+    if not token:
+        return None
+    expires_at = token.get("expires_at", 0)
+    if expires_at and expires_at < datetime.now(timezone.utc).timestamp() + 60 and token.get("refresh_token"):
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(GOOGLE_TOKEN_URL, data={
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "refresh_token": token["refresh_token"],
+                "grant_type": "refresh_token",
+            })
+        if response.status_code < 400:
+            refreshed = response.json()
+            refreshed["refresh_token"] = token["refresh_token"]
+            refreshed["expires_at"] = datetime.now(timezone.utc).timestamp() + refreshed.get("expires_in", 3600)
+            google_tokens["default"] = refreshed
+    return google_tokens["default"].get("access_token")
+
+
+@app.get("/api/v1/integrations/google/events", tags=["integrations"])
+async def google_events() -> dict:
+    access_token = await google_access_token()
+    if not access_token:
+        return {"connected": False, "events": []}
+    now = datetime.now(timezone.utc)
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(
+            f"{GOOGLE_CALENDAR_URL}/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"timeMin": now.isoformat(), "maxResults": 20, "singleEvents": "true", "orderBy": "startTime"},
+        )
+    if response.status_code >= 400:
+        return {"connected": True, "events": [], "error": f"Google Calendar HTTP {response.status_code}"}
+    return {"connected": True, "events": response.json().get("items", [])}
 
 
 @app.post("/webhooks/evolution", status_code=202, tags=["webhooks"])
