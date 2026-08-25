@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useState } from 'react'
+import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -8,6 +8,9 @@ type Config = { app_name: string; environment: string; ai_provider: string; groq
 function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const mediaRecorder = useRef<MediaRecorder | null>(null)
+  const audioChunks = useRef<Blob[]>([])
   const [view, setView] = useState<'chat' | 'settings'>('chat')
   const [config, setConfig] = useState<Config | null>(null)
   const [messages, setMessages] = useState<Message[]>([
@@ -16,17 +19,42 @@ function App() {
 
   useEffect(() => { fetch('/api/v1/config').then((response) => response.json()).then(setConfig).catch(() => undefined) }, [])
 
-  async function sendAudio(file: File) {
+  async function sendAudio(file: Blob, filename: string) {
     setSending(true)
     const form = new FormData()
-    form.append('file', file)
+    form.append('file', file, filename)
     try {
       const response = await fetch('/api/v1/chat/audio', { method: 'POST', body: form })
       const data = await response.json()
-      setMessages((current) => [...current, { role: 'user', text: `Áudio: ${file.name}` }, { role: 'assistant', text: data.text, transcription: data.transcription }])
+      setMessages((current) => [...current, { role: 'user', text: `Áudio: ${filename}` }, { role: 'assistant', text: data.text, transcription: data.transcription }])
     } catch {
       setMessages((current) => [...current, { role: 'assistant', text: 'Não consegui enviar o áudio para a API.' }])
     } finally { setSending(false) }
+  }
+
+  async function toggleRecording() {
+    if (recording && mediaRecorder.current) {
+      mediaRecorder.current.stop()
+      setRecording(false)
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      audioChunks.current = []
+      recorder.ondataavailable = (event) => { if (event.data.size > 0) audioChunks.current.push(event.data) }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+        const audio = new Blob(audioChunks.current, { type: 'audio/webm' })
+        if (audio.size > 0) void sendAudio(audio, `gravacao-${Date.now()}.webm`)
+      }
+      mediaRecorder.current = recorder
+      recorder.start()
+      setRecording(true)
+    } catch {
+      setMessages((current) => [...current, { role: 'assistant', text: 'Não consegui acessar seu microfone. Verifique a permissão do navegador.' }])
+    }
   }
 
   async function sendMessage(event: FormEvent) {
@@ -64,7 +92,7 @@ function App() {
           <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
           <div className="messages">{messages.map((message, index) => <div key={index} className={`message ${message.role}`}><span>{message.transcription && <small className="transcription">Transcrição: {message.transcription}</small>}{message.text}</span></div>)}</div>
         </div>
-        <form className="composer" onSubmit={sendMessage}><label className="audio-button" title="Enviar áudio">🎙 Áudio<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) sendAudio(file); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
+        <form className="composer" onSubmit={sendMessage}><button type="button" className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={sending}>{recording ? '■ Parar' : '● Gravar'}</button><label className="audio-button" title="Enviar arquivo de áudio">↥ Arquivo<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void sendAudio(file, file.name); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
         <p className="hint">Você também pode clicar em <strong>🎙 Áudio</strong> para enviar uma gravação.</p>
       </>}
     </section>
