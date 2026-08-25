@@ -135,7 +135,7 @@ async def send_audio_message(
 async def google_start() -> RedirectResponse:
     if not settings.google_client_id or not settings.google_client_secret:
         return RedirectResponse(url="/api/v1/integrations/google/status?error=missing_credentials", status_code=303)
-    state = secrets.token_urlsafe(32)
+    state = token_urlsafe(32)
     google_oauth_states.add(state)
     params = {
         "client_id": settings.google_client_id,
