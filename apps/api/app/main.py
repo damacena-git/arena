@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from uuid import uuid4
+import secrets
 
+import httpx
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from .ai import AIClient, AIProviderError
