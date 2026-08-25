@@ -48,6 +48,9 @@ async def public_config() -> dict[str, str | bool]:
         "ai_provider": settings.ai_provider,
         "groq_configured": bool(settings.groq_api_key),
         "openrouter_configured": bool(settings.openrouter_api_key),
+        "groq_model": settings.groq_model,
+        "openrouter_model": settings.openrouter_model,
+        "groq_transcription_model": settings.groq_transcription_model,
     }
 
 
