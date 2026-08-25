@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     app_name: str = "Sofia"
+    user_name: str = "Diego"
     environment: str = "development"
     api_host: str = "0.0.0.0"
     api_port: int = 8000

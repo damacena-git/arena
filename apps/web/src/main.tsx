@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 type Message = { role: 'assistant' | 'user'; text: string; transcription?: string }
-type Config = { app_name: string; environment: string; ai_provider: string; groq_configured: boolean; openrouter_configured: boolean; groq_model?: string; openrouter_model?: string; groq_transcription_model?: string }
+type Config = { app_name: string; user_name?: string; environment: string; ai_provider: string; groq_configured: boolean; openrouter_configured: boolean; groq_model?: string; openrouter_model?: string; groq_transcription_model?: string }
 
 function App() {
   const [input, setInput] = useState('')
@@ -25,8 +25,12 @@ function App() {
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'pt-BR'
-    utterance.rate = 1
-    utterance.pitch = 1
+    utterance.rate = 0.96
+    utterance.pitch = 1.06
+    const voices = window.speechSynthesis.getVoices()
+    const feminineVoice = voices.find((voice) => /pt[-_]BR/i.test(voice.lang) && /female|feminina|maria|francisca|luciana|fernanda|google português|brasil/i.test(voice.name))
+      || voices.find((voice) => /pt[-_]BR/i.test(voice.lang))
+    if (feminineVoice) utterance.voice = feminineVoice
     window.speechSynthesis.speak(utterance)
   }
 
@@ -100,7 +104,7 @@ function App() {
     </aside>
     <section className="content">
       {view === 'settings' ? <Settings config={config} /> : <>
-        <header className="topbar"><div><p className="eyebrow">CENTRAL DE COMANDO</p><h1>Bom dia, Eduardo</h1></div><div className="avatar">E</div></header>
+        <header className="topbar"><div><p className="eyebrow">CENTRAL DE COMANDO</p><h1>Bom dia, {config?.user_name || 'Diego'}</h1></div><div className="avatar">E</div></header>
         <div className="conversation">
           <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
           <div className="messages">{messages.map((message, index) => <div key={index} className={`message ${message.role}`}><span>{message.transcription && <small className="transcription">Transcrição: {message.transcription}</small>}{message.text}</span></div>)}</div>
@@ -113,7 +117,7 @@ function App() {
 }
 
 function Settings({ config }: { config: Config | null }) {
-  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
+  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="setting-row"><span>Usuário</span><strong>{config?.user_name || 'Diego'}</strong></div><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

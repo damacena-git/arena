@@ -44,6 +44,7 @@ async def health() -> dict[str, str]:
 async def public_config() -> dict[str, str | bool]:
     return {
         "app_name": settings.app_name,
+        "user_name": settings.user_name,
         "environment": settings.environment,
         "ai_provider": settings.ai_provider,
         "groq_configured": bool(settings.groq_api_key),
