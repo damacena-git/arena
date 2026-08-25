@@ -5,9 +5,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .ai import AIClient, AIProviderError
 from .config import get_settings
 
 settings = get_settings()
+ai_client = AIClient(settings)
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -43,11 +45,12 @@ async def public_config() -> dict[str, str]:
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
-    # Placeholder deliberado: a orquestração de IA e persistência entram na próxima etapa.
-    reply = (
-        "Recebi sua mensagem. A fundação da Sofia está funcionando; "
-        "as integrações e a memória serão habilitadas em seguida."
-    )
+    try:
+        ai_reply = await ai_client.complete(payload.text)
+        reply = ai_reply.text
+    except AIProviderError as exc:
+        # A mensagem permanece útil mesmo quando as chaves não foram configuradas.
+        reply = f"Ainda não consegui consultar minha inteligência artificial: {exc}"
     return ChatResponse(
         conversation_id=conversation_id,
         message_id=str(uuid4()),

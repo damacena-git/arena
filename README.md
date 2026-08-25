@@ -18,6 +18,17 @@ docker compose up --build
 
 O webhook inicial da Evolution API está em `POST /webhooks/evolution`. Nesta primeira fundação ele apenas aceita o payload; validação, persistência e processamento entram na próxima etapa.
 
+## Configurar IA
+
+Copie `.env.example` para `.env` e preencha pelo menos uma chave:
+
+```env
+GROQ_API_KEY=sua-chave
+OPENROUTER_API_KEY=sua-chave-opcional
+```
+
+A Sofia usa Groq por padrão e faz fallback para OpenRouter quando configurado. Para trocar o provedor ou o modelo, altere `AI_PROVIDER`, `AI_FALLBACK_PROVIDER`, `GROQ_MODEL` e `OPENROUTER_MODEL`. Nunca versione o arquivo `.env`.
+
 ## Domínios de produção
 
 - `sofia.2ads.com.br` — frontend

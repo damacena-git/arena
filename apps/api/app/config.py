@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: str = "http://localhost:5173"
     ai_provider: str = "groq"
+    ai_fallback_provider: str = "openrouter"
+    ai_timeout_seconds: float = 30.0
+    app_url: str = "http://localhost:5173"
+    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     groq_api_key: str = ""
     openrouter_api_key: str = ""
     evolution_api_url: str = ""
