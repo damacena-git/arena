@@ -12,14 +12,81 @@ function App() {
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const audioChunks = useRef<Blob[]>([])
-  const [view, setView] = useState<'chat' | 'settings'>('chat')
+  const [view, setView] = useState<'chat' | 'settings' | 'clickup'>('chat')
   const [config, setConfig] = useState<Config | null>(null)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', text: 'Olá! Eu sou a Sofia. Como posso ajudar você hoje?' },
   ])
 
-  useEffect(() => { fetch('/api/v1/config').then((response) => response.json()).then(setConfig).catch(() => undefined) }, [])
+  const [clickupConnected, setClickupConnected] = useState(false)
+  const [clickupLists, setClickupLists] = useState<{ id: string; name: string }[]>([])
+  const [clickupTasks, setClickupTasks] = useState<{ id: string; name: string; priority?: string }[]>([])
+  const [clickupTaskName, setClickupTaskName] = useState('')
+  const [clickupFormList, setClickupFormList] = useState('')
+  const [clickupLoading, setClickupLoading] = useState(false)
+  const [clickupError, setClickupError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/v1/config')
+      .then((response) => response.json())
+      .then(setConfig)
+      .catch(() => undefined)
+    refreshClickupStatus()
+  }, [])
+
+  async function refreshClickupStatus() {
+    try {
+      const response = await fetch('/api/v1/integrations/clickup/status')
+      const data = await response.json()
+      setClickupConnected(Boolean(data.connected))
+      if (data.connected) {
+        Promise.all([
+          fetch('/api/v1/integrations/clickup/lists').then((response) => response.json()),
+          fetch('/api/v1/integrations/clickup/tasks').then((response) => response.json()),
+        ])
+          .then(([listsResponse, tasksResponse]) => {
+            setClickupLists((listsResponse.lists || []).slice(0, 50))
+            setClickupTasks((tasksResponse.tasks || []).slice(0, 50))
+            if (!clickupFormList && listsResponse.lists && listsResponse.lists[0]) {
+              setClickupFormList(listsResponse.lists[0].id)
+            }
+          })
+          .catch(() => {})
+      }
+    } catch {
+      setClickupConnected(false)
+    }
+  }
+
+  async function createClickupTask(event: FormEvent) {
+    event.preventDefault()
+    if (!clickupTaskName.trim()) return
+    setClickupLoading(true)
+    setClickupError(null)
+    try {
+      const listId = clickupFormList || new URLSearchParams(window.location.search).get('clickup_list') || undefined
+      const body: Record<string, unknown> = { name: clickupTaskName }
+      if (listId) body.list_id = listId
+      const response = await fetch('/api/v1/integrations/clickup/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Não foi possível criar a tarefa.')
+      setClickupTaskName('')
+      const tasksResponse = listId
+        ? await fetch(`/api/v1/integrations/clickup/tasks?list_id=${encodeURIComponent(listId)}`).then((response) => response.json())
+        : await fetch('/api/v1/integrations/clickup/tasks').then((response) => response.json())
+      setClickupTasks((tasksResponse.tasks || []).slice(0, 50))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao criar tarefa.'
+      setClickupError(message)
+    } finally {
+      setClickupLoading(false)
+    }
+  }
 
   function speak(text: string) {
     if (!voiceEnabled || !('speechSynthesis' in window)) return
@@ -100,14 +167,19 @@ function App() {
       <p className="eyebrow">SECRETÁRIA PESSOAL</p>
       <nav>
         <button className={`nav-item ${view === 'chat' ? 'active' : ''}`} onClick={() => setView('chat')}>◌ <span>Conversa</span></button>
-        <button className="nav-item">✓ <span>Tarefas</span></button>
+        <button className={`nav-item ${view === 'clickup' ? 'active' : ''}`} onClick={() => setView('clickup')}>✓ <span>Tarefas</span></button>
         <button className="nav-item">◷ <span>Agenda</span></button>
         <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')}>⚙ <span>Configuração</span></button>
       </nav>
       <div className="status"><span className="dot" /> Sistema online<br /><small>Modo de desenvolvimento</small></div>
     </aside>
     <section className="content">
-      {view === 'settings' ? <Settings config={config} /> : <>
+      {view === 'clickup' ? <ClickupPanel
+        connected={clickupConnected}
+        lists={clickupLists}
+        tasks={clickupTasks}
+        statusLabel={clickupLoading ? 'Salvando' : clickupError ? 'Falha' : 'Atualizado'}
+      /> : view === 'settings' ? <Settings config={config} /> : <>
         <header className="topbar"><div><p className="eyebrow">CENTRAL DE COMANDO</p><h1>Bom dia, {config?.user_name || 'Diego'}</h1></div><div className="avatar">E</div></header>
         <div className="conversation">
           <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
@@ -120,8 +192,12 @@ function App() {
   </main>
 }
 
+function ClickupPanel({ connected, lists, tasks, statusLabel }: { connected: boolean; lists: { id: string; name: string }[]; tasks: { id: string; name: string; priority?: string }[]; statusLabel: string }) {
+  return <div className="settings-page"><p className="eyebrow">CLICKUP</p><h1>Tarefas</h1><p className="settings-lead">Gerencie suas listas e tarefas do ClickUp direto pela Sofia.</p><div className="settings-card"><div className="integration-row"><div><strong>Status da conexão</strong><small>{connected ? 'Conectado.' : 'Sem conexão ativa.'}</small></div><span className={`status-pill ${connected ? 'ok' : 'muted'}`}>{statusLabel}</span></div>{!connected ? <p className="settings-note">Adicione <strong>CLICKUP_API_KEY</strong> e <strong>CLICKUP_TEAM_ID</strong> no .env para liberar essa tela.</p> : <><form className="composer" onSubmit={(event) => { const current = event.currentTarget.querySelector('input[name=name]') as HTMLInputElement | null; if (current) setClickupTaskName(current.value) }}><input value={clickupTaskName} onChange={(event) => setClickupTaskName(event.target.value)} placeholder="Nova tarefa" /><select value={clickupFormList} onChange={(event) => setClickupFormList(event.target.value)}>{lists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="submit" disabled={clickupLoading || !clickupTaskName.trim()}>{clickupLoading ? 'Salvando…' : 'Criar'}</button></form>{clickupError && <p className="settings-note" style={{ color: '#f87171' }}>{clickupError}</p>}<div className="task-list">{tasks.map((item) => <div key={item.id} className="task-card"><strong>{item.name}</strong><small>{item.priority}</small></div>) || <p className="settings-note">Nenhuma tarefa encontrada para a lista selecionada.</p>}</div></>}</div></div>
+}
+
 function Settings({ config }: { config: Config | null }) {
-  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="integration-row"><div><strong>Google Calendar</strong><small>Conecte sua agenda para consultar compromissos.</small></div><a className="connect-button" href="/api/v1/integrations/google/start">Conectar agenda</a></div><div className="setting-row"><span>Usuário</span><strong>{config?.user_name || 'Diego'}</strong></div><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
+  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="integration-row"><div><strong>Google Calendar</strong><small>Conecte sua agenda para consultar compromissos.</small></div><a className="connect-button" href="/api/v1/integrations/google/start">Conectar agenda</a></div><div className="integration-row"><div><strong>ClickUp</strong><small>Integração com listas e tarefas.</small></div><span className={`status-pill ${clickupConnected ? 'ok' : 'muted'}`}>{clickupConnected ? 'Conectado' : 'Desconectado'}</span></div><div className="setting-row"><span>Usuário</span><strong>{config?.user_name || 'Diego'}</strong></div><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

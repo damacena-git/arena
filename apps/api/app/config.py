@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     evolution_api_url: str = ""
     evolution_api_key: str = ""
     evolution_instance: str = ""
+    clickup_api_key: str = ""
+    clickup_default_team_id: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google/callback"

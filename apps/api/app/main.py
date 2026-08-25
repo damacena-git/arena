@@ -1,11 +1,15 @@
 from datetime import datetime, timezone
+from secrets import token_urlsafe
 from uuid import uuid4
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, RedirectResponse, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .ai import AIClient, AIProviderError
+from .clickup import ClickUpClient, ClickUpError, get_clickup_client, require_clickup
 from .config import get_settings
 
 settings = get_settings()
@@ -206,6 +210,63 @@ async def google_events() -> dict:
     if response.status_code >= 400:
         return {"connected": True, "events": [], "error": f"Google Calendar HTTP {response.status_code}"}
     return {"connected": True, "events": response.json().get("items", [])}
+
+
+@app.get("/api/v1/integrations/clickup/status", tags=["integrations"])
+async def clickup_status() -> dict[str, bool | str | None]:
+    client = get_clickup_client()
+    if not client:
+        return {"connected": False, "error": "CLICKUP_API_KEY não configurada"}
+    return {"connected": True, "error": None}
+
+
+@app.get("/api/v1/integrations/clickup/workspaces", tags=["integrations"])
+async def clickup_workspaces() -> dict:
+    client = require_clickup()
+    workspaces = await client.get_workspaces()
+    return {"connected": True, "workspaces": workspaces[:20]}
+
+
+@app.get("/api/v1/integrations/clickup/lists", tags=["integrations"])
+async def clickup_lists(workspace_id: str | None = None) -> dict:
+    client = require_clickup()
+    workspace_id = workspace_id or await client.get_workspace_id()
+    lists = await client.get_lists(workspace_id)
+    return {"connected": True, "lists": lists[:50]}
+
+
+@app.get("/api/v1/integrations/clickup/tasks", tags=["integrations"])
+async def clickup_tasks(list_id: str | None = None) -> dict:
+    client = require_clickup()
+    list_id = list_id or await client.get_default_list_id()
+    tasks = await client.get_tasks(list_id)
+    return {"connected": True, "list_id": list_id, "tasks": tasks[:50]}
+
+
+@app.post("/api/v1/integrations/clickup/tasks", tags=["integrations"])
+async def clickup_create_task(
+    list_id: str | None = None,
+    name: str = "",
+    description: str | None = None,
+    priority: int | None = None,
+    due_dates: str | None = None,
+    assignees: str | None = None,
+    tags: str | None = None,
+) -> dict:
+    client = require_clickup()
+    list_id = list_id or await client.get_default_list_id()
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="name é obrigatório")
+    task = await client.create_task(
+        list_id=list_id,
+        name=name,
+        description=description,
+        priority=priority,
+        due_dates=due_dates,
+        assignees=assignees.split(",") if assignees else None,
+        tags=tags.split(",") if tags else None,
+    )
+    return {"connected": True, "task": task}
 
 
 @app.post("/webhooks/evolution", status_code=202, tags=["webhooks"])
