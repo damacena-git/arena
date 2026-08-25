@@ -32,7 +32,11 @@ class AIClient:
             except (httpx.HTTPError, AIProviderError) as exc:
                 errors.append(f"{provider}: {exc}")
 
-        raise AIProviderError("Os provedores de IA não responderam. Tente novamente em instantes.")
+        detail = "; ".join(errors)
+        raise AIProviderError(
+            f"Os provedores de IA não responderam ({detail}). "
+            "Verifique as chaves, o modelo e a conexão."
+        )
 
     def _provider_order(self) -> list[str]:
         configured = [self.settings.ai_provider.lower()]
