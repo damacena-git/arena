@@ -4,8 +4,9 @@ from uuid import uuid4
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, RedirectResponse, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from .ai import AIClient, AIProviderError
@@ -271,7 +272,5 @@ async def clickup_create_task(
 
 @app.post("/webhooks/evolution", status_code=202, tags=["webhooks"])
 async def evolution_webhook(request: Request) -> dict[str, str]:
-    # O payload é aceito agora para permitir configurar a Evolution API sem bloquear o MVP.
-    # Validação de assinatura, idempotência e enfileiramento serão adicionados antes do uso real.
     await request.json()
     return {"status": "accepted"}
