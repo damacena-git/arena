@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 30.0
     app_url: str = "http://localhost:5173"
     groq_model: str = "llama-3.3-70b-versatile"
-    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    openrouter_model: str = "openrouter/free"
     groq_api_key: str = ""
     openrouter_api_key: str = ""
     evolution_api_url: str = ""
