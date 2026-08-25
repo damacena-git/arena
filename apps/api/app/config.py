@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 30.0
     app_url: str = "http://localhost:5173"
     groq_model: str = "llama-3.3-70b-versatile"
+    groq_transcription_model: str = "whisper-large-v3-turbo"
     openrouter_model: str = "openrouter/free"
     groq_api_key: str = ""
     openrouter_api_key: str = ""

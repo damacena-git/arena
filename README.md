@@ -29,6 +29,8 @@ OPENROUTER_API_KEY=sua-chave-opcional
 
 A Sofia usa Groq por padrão e faz fallback para OpenRouter quando configurado. Para trocar o provedor ou o modelo, altere `AI_PROVIDER`, `AI_FALLBACK_PROVIDER`, `GROQ_MODEL` e `OPENROUTER_MODEL`. Nunca versione o arquivo `.env`.
 
+A resposta da API informa `provider` e `model`, e o chat exibe essa informação abaixo da resposta. O botão de microfone permite enviar um arquivo de áudio de até 25 MB. A transcrição é feita pelo modelo `GROQ_TRANSCRIPTION_MODEL` e enviada à Sofia para gerar a resposta.
+
 ## Domínios de produção
 
 - `sofia.2ads.com.br` — frontend

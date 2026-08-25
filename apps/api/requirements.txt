@@ -5,3 +5,4 @@ sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 redis==5.2.1
 httpx==0.28.1
+python-multipart==0.0.20

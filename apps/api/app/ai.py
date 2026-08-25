@@ -20,6 +20,30 @@ class AIClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
+    async def transcribe(self, filename: str, content: bytes, content_type: str) -> str:
+        if not self.settings.groq_api_key:
+            raise AIProviderError("A transcrição de áudio usa o Groq; configure GROQ_API_KEY.")
+
+        files = {"file": (filename, content, content_type or "audio/mpeg")}
+        data = {"model": self.settings.groq_transcription_model, "response_format": "json"}
+        headers = {"Authorization": f"Bearer {self.settings.groq_api_key}"}
+        async with httpx.AsyncClient(timeout=self.settings.ai_timeout_seconds) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers=headers,
+                files=files,
+                data=data,
+            )
+        if response.status_code >= 400:
+            raise AIProviderError(f"transcrição Groq: resposta HTTP {response.status_code}")
+        try:
+            text = response.json()["text"].strip()
+        except (ValueError, KeyError, TypeError) as exc:
+            raise AIProviderError("transcrição inválida do Groq") from exc
+        if not text:
+            raise AIProviderError("o áudio não contém fala identificável")
+        return text
+
     async def complete(self, user_text: str) -> AIReply:
         providers = self._provider_order()
         if not providers:

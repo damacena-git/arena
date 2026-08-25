@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,9 @@ class ChatResponse(BaseModel):
     message_id: str
     text: str
     created_at: datetime
+    provider: str | None = None
+    model: str | None = None
+    transcription: str | None = None
 
 
 @app.get("/health", tags=["system"])
@@ -51,17 +54,49 @@ async def public_config() -> dict[str, str | bool]:
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
+    provider = model = None
     try:
         ai_reply = await ai_client.complete(payload.text)
-        reply = ai_reply.text
+        reply, provider, model = ai_reply.text, ai_reply.provider, ai_reply.model
     except AIProviderError as exc:
-        # A mensagem permanece útil mesmo quando as chaves não foram configuradas.
         reply = f"Ainda não consegui consultar minha inteligência artificial: {exc}"
     return ChatResponse(
         conversation_id=conversation_id,
         message_id=str(uuid4()),
         text=reply,
         created_at=datetime.now(timezone.utc),
+        provider=provider,
+        model=model,
+    )
+
+
+@app.post("/api/v1/chat/audio", response_model=ChatResponse, tags=["chat"])
+async def send_audio_message(
+    file: UploadFile = File(...), conversation_id: str | None = None
+) -> ChatResponse:
+    content = await file.read()
+    if len(content) > 25 * 1024 * 1024:
+        return ChatResponse(
+            conversation_id=conversation_id or str(uuid4()), message_id=str(uuid4()),
+            text="O áudio é muito grande. Envie um arquivo de até 25 MB.",
+            created_at=datetime.now(timezone.utc),
+        )
+    current_conversation_id = conversation_id or str(uuid4())
+    try:
+        transcript = await ai_client.transcribe(file.filename or "audio", content, file.content_type or "")
+        ai_reply = await ai_client.complete(transcript)
+        reply, provider, model = ai_reply.text, ai_reply.provider, ai_reply.model
+    except AIProviderError as exc:
+        transcript = None
+        reply, provider, model = f"Não consegui processar o áudio: {exc}", None, None
+    return ChatResponse(
+        conversation_id=current_conversation_id,
+        message_id=str(uuid4()),
+        text=reply,
+        created_at=datetime.now(timezone.utc),
+        provider=provider,
+        model=model,
+        transcription=transcript,
     )
 
 
