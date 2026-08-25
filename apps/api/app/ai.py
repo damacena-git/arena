@@ -44,7 +44,7 @@ class AIClient:
             raise AIProviderError("o áudio não contém fala identificável")
         return text
 
-    async def complete(self, user_text: str) -> AIReply:
+    async def complete(self, user_text: str, history: list[dict[str, str]] | None = None) -> AIReply:
         providers = self._provider_order()
         if not providers:
             raise AIProviderError("Nenhum provedor de IA está configurado.")
@@ -52,7 +52,7 @@ class AIClient:
         errors: list[str] = []
         for provider in providers:
             try:
-                return await self._complete_with(provider, user_text)
+                return await self._complete_with(provider, user_text, history)
             except (httpx.HTTPError, AIProviderError) as exc:
                 errors.append(f"{provider}: {exc}")
 
@@ -75,7 +75,12 @@ class AIClient:
             "openrouter": self.settings.openrouter_api_key,
         }.get(provider, "")
 
-    async def _complete_with(self, provider: str, user_text: str) -> AIReply:
+    async def _complete_with(
+        self,
+        provider: str,
+        user_text: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> AIReply:
         if provider == "groq":
             base_url = "https://api.groq.com/openai/v1/chat/completions"
             model = self.settings.groq_model
@@ -106,6 +111,7 @@ class AIClient:
                         "faça uma pergunta clara."
                     ),
                 },
+                *(history or []),
                 {"role": "user", "content": user_text},
             ],
         }

@@ -14,6 +14,7 @@ function App() {
   const audioChunks = useRef<Blob[]>([])
   const [view, setView] = useState<'chat' | 'settings'>('chat')
   const [config, setConfig] = useState<Config | null>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', text: 'Olá! Eu sou a Sofia. Como posso ajudar você hoje?' },
   ])
@@ -38,9 +39,11 @@ function App() {
     setSending(true)
     const form = new FormData()
     form.append('file', file, filename)
+    if (conversationId) form.append('conversation_id', conversationId)
     try {
       const response = await fetch('/api/v1/chat/audio', { method: 'POST', body: form })
       const data = await response.json()
+      setConversationId(data.conversation_id)
       setMessages((current) => [...current, { role: 'user', text: `Áudio: ${filename}` }, { role: 'assistant', text: data.text, transcription: data.transcription }])
       speak(data.text)
     } catch {
@@ -81,8 +84,9 @@ function App() {
     setMessages((current) => [...current, { role: 'user', text }])
     setSending(true)
     try {
-      const response = await fetch('/api/v1/chat/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+      const response = await fetch('/api/v1/chat/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, conversation_id: conversationId }) })
       const data = await response.json()
+      setConversationId(data.conversation_id)
       setMessages((current) => [...current, { role: 'assistant', text: data.text }])
       speak(data.text)
     } catch {

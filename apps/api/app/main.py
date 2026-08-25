@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,11 @@ from .config import get_settings
 
 settings = get_settings()
 ai_client = AIClient(settings)
+# Memória curta temporária; será substituída pela persistência no PostgreSQL.
+conversation_histories: dict[str, list[dict[str, str]]] = {}
+MAX_HISTORY_MESSAGES = 12
+
+
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -60,8 +65,14 @@ async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
     provider = model = None
     try:
-        ai_reply = await ai_client.complete(payload.text)
+        history = conversation_histories.setdefault(conversation_id, [])
+        ai_reply = await ai_client.complete(payload.text, history)
         reply, provider, model = ai_reply.text, ai_reply.provider, ai_reply.model
+        history.extend([
+            {"role": "user", "content": payload.text},
+            {"role": "assistant", "content": reply},
+        ])
+        del history[:-MAX_HISTORY_MESSAGES]
     except AIProviderError as exc:
         reply = f"Ainda não consegui consultar minha inteligência artificial: {exc}"
     return ChatResponse(
@@ -76,7 +87,7 @@ async def send_chat_message(payload: ChatMessage) -> ChatResponse:
 
 @app.post("/api/v1/chat/audio", response_model=ChatResponse, tags=["chat"])
 async def send_audio_message(
-    file: UploadFile = File(...), conversation_id: str | None = None
+    file: UploadFile = File(...), conversation_id: str | None = Form(None)
 ) -> ChatResponse:
     content = await file.read()
     if len(content) > 25 * 1024 * 1024:
@@ -88,8 +99,14 @@ async def send_audio_message(
     current_conversation_id = conversation_id or str(uuid4())
     try:
         transcript = await ai_client.transcribe(file.filename or "audio", content, file.content_type or "")
-        ai_reply = await ai_client.complete(transcript)
+        history = conversation_histories.setdefault(current_conversation_id, [])
+        ai_reply = await ai_client.complete(transcript, history)
         reply, provider, model = ai_reply.text, ai_reply.provider, ai_reply.model
+        history.extend([
+            {"role": "user", "content": transcript},
+            {"role": "assistant", "content": reply},
+        ])
+        del history[:-MAX_HISTORY_MESSAGES]
     except AIProviderError as exc:
         transcript = None
         reply, provider, model = f"Não consegui processar o áudio: {exc}", None, None
