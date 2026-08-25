@@ -1,5 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -22,7 +27,13 @@ class Settings(BaseSettings):
     evolution_api_key: str = ""
     evolution_instance: str = ""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # Procura primeiro o .env na raiz do projeto, independentemente do diretório
+    # a partir do qual o uvicorn foi iniciado.
+    model_config = SettingsConfigDict(
+        env_file=(PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:

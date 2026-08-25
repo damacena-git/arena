@@ -38,8 +38,14 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/api/v1/config", tags=["system"])
-async def public_config() -> dict[str, str]:
-    return {"app_name": settings.app_name, "environment": settings.environment}
+async def public_config() -> dict[str, str | bool]:
+    return {
+        "app_name": settings.app_name,
+        "environment": settings.environment,
+        "ai_provider": settings.ai_provider,
+        "groq_configured": bool(settings.groq_api_key),
+        "openrouter_configured": bool(settings.openrouter_api_key),
+    }
 
 
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
