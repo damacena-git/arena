@@ -9,6 +9,7 @@ function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [recording, setRecording] = useState(false)
+  const [voiceEnabled, setVoiceEnabled] = useState(true)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const audioChunks = useRef<Blob[]>([])
   const [view, setView] = useState<'chat' | 'settings'>('chat')
@@ -19,6 +20,16 @@ function App() {
 
   useEffect(() => { fetch('/api/v1/config').then((response) => response.json()).then(setConfig).catch(() => undefined) }, [])
 
+  function speak(text: string) {
+    if (!voiceEnabled || !('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'pt-BR'
+    utterance.rate = 1
+    utterance.pitch = 1
+    window.speechSynthesis.speak(utterance)
+  }
+
   async function sendAudio(file: Blob, filename: string) {
     setSending(true)
     const form = new FormData()
@@ -27,6 +38,7 @@ function App() {
       const response = await fetch('/api/v1/chat/audio', { method: 'POST', body: form })
       const data = await response.json()
       setMessages((current) => [...current, { role: 'user', text: `Áudio: ${filename}` }, { role: 'assistant', text: data.text, transcription: data.transcription }])
+      speak(data.text)
     } catch {
       setMessages((current) => [...current, { role: 'assistant', text: 'Não consegui enviar o áudio para a API.' }])
     } finally { setSending(false) }
@@ -68,6 +80,7 @@ function App() {
       const response = await fetch('/api/v1/chat/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
       const data = await response.json()
       setMessages((current) => [...current, { role: 'assistant', text: data.text }])
+      speak(data.text)
     } catch {
       setMessages((current) => [...current, { role: 'assistant', text: 'Não consegui falar com a API. Verifique se o backend está ativo.' }])
     } finally { setSending(false) }
@@ -92,8 +105,8 @@ function App() {
           <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
           <div className="messages">{messages.map((message, index) => <div key={index} className={`message ${message.role}`}><span>{message.transcription && <small className="transcription">Transcrição: {message.transcription}</small>}{message.text}</span></div>)}</div>
         </div>
-        <form className="composer" onSubmit={sendMessage}><button type="button" className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={sending}>{recording ? '■ Parar' : '● Gravar'}</button><label className="audio-button" title="Enviar arquivo de áudio">↥ Arquivo<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void sendAudio(file, file.name); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
-        <p className="hint">Você também pode clicar em <strong>🎙 Áudio</strong> para enviar uma gravação.</p>
+        <form className="composer" onSubmit={sendMessage}><button type="button" className={`voice-button ${voiceEnabled ? 'enabled' : ''}`} onClick={() => setVoiceEnabled((enabled) => !enabled)} title="Ativar ou silenciar respostas faladas">{voiceEnabled ? '🔊 Voz' : '🔇 Voz'}</button><button type="button" className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={sending}>{recording ? '■ Parar' : '● Gravar'}</button><label className="audio-button" title="Enviar arquivo de áudio">↥ Arquivo<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void sendAudio(file, file.name); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
+        <p className="hint">Clique em <strong>● Gravar</strong> para falar e receba a resposta em áudio. <strong>🔊 Voz</strong> liga/desliga a fala.</p>
       </>}
     </section>
   </main>
