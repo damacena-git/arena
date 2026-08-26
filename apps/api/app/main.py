@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from secrets import token_urlsafe
 import unicodedata
@@ -86,6 +86,36 @@ def chat_response(conversation_id: str, text: str) -> ChatResponse:
     return ChatResponse(conversation_id=conversation_id, message_id=str(uuid4()), text=text, created_at=datetime.now(timezone.utc))
 
 
+async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse | None:
+    normalized = normalize_text(text)
+    if "clickup" not in normalized or "tarefa" not in normalized or "semana passada" not in normalized:
+        return None
+    client = require_clickup()
+    today = datetime.now(timezone.utc).date()
+    this_monday = today - timedelta(days=today.weekday())
+    last_monday = this_monday - timedelta(days=7)
+    start = int(datetime.combine(last_monday, datetime.min.time(), timezone.utc).timestamp() * 1000)
+    end = int(datetime.combine(this_monday, datetime.min.time(), timezone.utc).timestamp() * 1000)
+    tasks = await client.get_filtered_tasks(
+        await client.get_workspace_id(),
+        date_created_gt=start,
+        date_created_lt=end,
+        include_closed="true",
+        subtasks="false",
+    )
+    if not tasks:
+        return chat_response(conversation_id, "Não encontrei tarefas criadas no ClickUp durante a semana passada.")
+    lines = [f"Encontrei {len(tasks)} tarefa(s) criada(s) na semana passada:"]
+    for task in tasks[:30]:
+        status = task.get("status", {}).get("status", "")
+        list_name = task.get("list", {}).get("name", "")
+        suffix = f" — {list_name}" if list_name else ""
+        lines.append(f"• {task.get('name', 'Sem título')}{suffix} ({status})")
+    if len(tasks) > 30:
+        lines.append(f"… e mais {len(tasks) - 30} tarefa(s).")
+    return chat_response(conversation_id, "\\n".join(lines))
+
+
 async def prepare_clickup_action(conversation_id: str, text: str) -> ChatResponse | None:
     normalized = normalize_text(text)
     pending = pending_clickup_actions.get(conversation_id)
@@ -124,6 +154,9 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
+    read_response = await prepare_clickup_read(conversation_id, payload.text)
+    if read_response:
+        return read_response
     action_response = await prepare_clickup_action(conversation_id, payload.text)
     if action_response:
         return action_response

@@ -75,6 +75,10 @@ class ClickUpClient:
         data = await self._request("GET", f"/list/{list_id}/task")
         return data.get("tasks", [])
 
+    async def get_filtered_tasks(self, workspace_id: str, **filters: str | int | bool) -> list[dict]:
+        data = await self._request("GET", f"/team/{workspace_id}/task", params=filters)
+        return data.get("tasks", [])
+
     async def create_task(
         self,
         list_id: str,
