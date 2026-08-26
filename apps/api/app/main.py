@@ -119,7 +119,7 @@ async def prepare_google_read(conversation_id: str, text: str) -> ChatResponse |
         if "T" in start:
             start = start.split("T", 1)[1][:5]
         lines.append(f"• {start} — {event.get('summary', 'Sem título')}")
-    return chat_response(conversation_id, "\\n".join(lines))
+    return chat_response(conversation_id, "\n".join(lines))
 
 
 async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse | None:
@@ -149,13 +149,13 @@ async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse 
         lines.append(f"• {task.get('name', 'Sem título')}{suffix} ({status})")
     if len(tasks) > 30:
         lines.append(f"… e mais {len(tasks) - 30} tarefa(s).")
-    return chat_response(conversation_id, "\\n".join(lines))
+    return chat_response(conversation_id, "\n".join(lines))
 
 
 async def prepare_clickup_action(conversation_id: str, text: str) -> ChatResponse | None:
     normalized = normalize_text(text)
     pending = pending_clickup_actions.get(conversation_id)
-    if pending and normalized in {"sim", "s", "confirmo", "pode", "pode criar", "ok"}:
+    if pending and pending.get("awaiting_confirmation") and normalized in {"sim", "s", "confirmo", "pode", "pode criar", "ok", "sim pode criar"}:
         client = require_clickup()
         task = await client.create_task(
             list_id=pending["list_id"], name=pending["name"],
@@ -163,32 +163,40 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
         )
         pending_clickup_actions.pop(conversation_id, None)
         return chat_response(conversation_id, f"Tarefa criada no ClickUp com sucesso: {task.get('name', pending['name'])}.\n{task.get('url', '')}")
-    if pending and normalized in {"nao", "cancela", "cancelar"}:
+    if pending and pending.get("awaiting_confirmation") and normalized in {"nao", "cancela", "cancelar"}:
         pending_clickup_actions.pop(conversation_id, None)
         return chat_response(conversation_id, "Tudo bem, não criei a tarefa.")
 
-    if "tarefa" not in normalized or not re.search(r"\b(crie|criar|cria|criei)\b", normalized):
-        return None
     client = require_clickup()
     lists = await client.get_lists_for_workspace()
-    requested_list = re.search(r"lista\s+(?:a\s+)?(.+?)(?:\.|,|\s+e\s+o\s+(?:titulo|título)|$)", normalized)
-    requested_name = requested_list.group(1).strip() if requested_list else ""
     list_item = None
-    for item in lists:
+    # Procura pelo nome real da lista, evitando que o restante da frase seja confundido com o nome.
+    for item in sorted(lists, key=lambda value: len(normalize_text(value.get("name", ""))), reverse=True):
         item_name = normalize_text(item.get("name", "")).strip()
         folder_name = normalize_text(item.get("folder", {}).get("name", "")).strip()
-        if requested_name and (requested_name == item_name or requested_name in item_name or item_name in requested_name):
+        if item_name and re.search(rf"\b{re.escape(item_name)}\b", normalized):
             if "datelha" not in normalized or folder_name == "datelha":
                 list_item = item
                 break
     if not list_item:
-        return chat_response(conversation_id, f"Não encontrei a lista {requested_name or 'solicitada'} no ClickUp.")
-    title_match = re.search(r"(?:titulo|título)\s+(?:da\s+tarefa\s+)?(?:sera|será)\s+(.+?)(?:\.|$)", normalized)
+        if "tarefa" not in normalized or not re.search(r"\b(crie|criar|cria|criei)\b", normalized):
+            return None
+        return None
+
+    title_match = re.search(r"(?:titulo|título)\s+(?:da\s+tarefa\s+)?(?:sera|será|e)\s+(.+?)(?=\s+(?:hoje|amanha|amanhã|as|às|e\s+(?:o\s+)?horario|e\s+coloque|coloque)|$)", text, re.IGNORECASE)
     if not title_match:
-        title_match = re.search(r"\bcomo\s+(.+?)\s+(?:tendo|com)\s+(?:o\s+)?(?:diego|eu)\b", normalized)
+        list_position = normalized.find(normalize_text(list_item["name"]))
+        after_list = normalized[list_position + len(normalize_text(list_item["name"])):] if list_position >= 0 else ""
+        title_match = re.match(r"\s*(?:e\s+)?(?:o\s+titulo\s+sera\s+)?(.+?)(?=\s+(?:hoje|amanha|as|às|e\s+(?:o\s+)?horario|e\s+coloque|coloque)|$)", after_list)
+    if not title_match and pending and pending.get("awaiting_title"):
+        title_match = re.match(r"\s*(.+?)\s*$", text)
     if not title_match:
+        pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "list_name": list_item["name"], "awaiting_title": True}
         return chat_response(conversation_id, f"Encontrei a lista {list_item['name']}. Qual deve ser o título da tarefa?")
+
     name = title_match.group(1).strip().rstrip(".,")
+    if not name or len(name) < 3:
+        return chat_response(conversation_id, f"Encontrei a lista {list_item['name']}. Qual deve ser o título da tarefa?")
     members = await client.get_members(await client.get_workspace_id())
     diego = next((item for item in members if "diego" in normalize_text(str(item.get("user", {}).get("username", "")) + " " + str(item.get("user", {}).get("email", "")) + " " + str(item.get("user", {}).get("initials", "")))), None)
     if not diego:
@@ -197,14 +205,13 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
     time_match = re.search(r"hoje\s+(?:as|às)\s+(\d{1,2})(?:\s*:\s*(\d{2}))?", normalized)
     if time_match:
         try:
-            local_zone = ZoneInfo(settings.user_timezone)
-            local_now = datetime.now(local_zone)
+            local_now = datetime.now(ZoneInfo(settings.user_timezone))
             due = local_now.replace(hour=int(time_match.group(1)), minute=int(time_match.group(2) or 0), second=0, microsecond=0)
             due_date = str(int(due.timestamp() * 1000))
         except (ValueError, KeyError):
-            due_date = None
+            pass
     assignee_id = str(diego.get("user", {}).get("id"))
-    pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "name": name, "assignee_id": assignee_id, "due_date": due_date}
+    pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "name": name, "assignee_id": assignee_id, "due_date": due_date, "awaiting_confirmation": True}
     due_label = f"\nPrazo: hoje às {time_match.group(1)}:{time_match.group(2) or '00'}" if time_match else ""
     return chat_response(conversation_id, f"Encontrei:\nCliente: {list_item.get('folder', {}).get('name', 'não informado')}\nLista: {list_item['name']}\nTítulo: {name}\nResponsável: Diego Damacena{due_label}\n\nPosso criar essa tarefa?")
 
