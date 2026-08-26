@@ -88,7 +88,7 @@ def chat_response(conversation_id: str, text: str) -> ChatResponse:
 
 async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse | None:
     normalized = normalize_text(text)
-    if "clickup" not in normalized or "tarefa" not in normalized or "semana passada" not in normalized:
+    if "tarefa" not in normalized or "semana passada" not in normalized:
         return None
     client = require_clickup()
     today = datetime.now(timezone.utc).date()
