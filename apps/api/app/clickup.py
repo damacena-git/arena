@@ -64,6 +64,13 @@ class ClickUpClient:
                 lists.extend(folder_lists.get("lists", []))
         return lists
 
+    async def get_members(self, workspace_id: str) -> list[dict]:
+        data = await self._request("GET", f"/team/{workspace_id}/member")
+        return data.get("members", [])
+
+    async def get_lists_for_workspace(self) -> list[dict]:
+        return await self.get_lists(await self.get_workspace_id())
+
     async def get_tasks(self, list_id: str) -> list[dict]:
         data = await self._request("GET", f"/list/{list_id}/task")
         return data.get("tasks", [])
@@ -86,7 +93,7 @@ class ClickUpClient:
         if due_dates:
             payload["due_dates"] = due_dates
         if assignees:
-            payload["assignees"] = assignees
+            payload["assignees"] = [int(assignee) for assignee in assignees]
         if tags:
             payload["tags"] = tags
 

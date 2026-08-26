@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+import re
 from secrets import token_urlsafe
+import unicodedata
 from uuid import uuid4
 from urllib.parse import urlencode
 
@@ -23,6 +25,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_URL = "https://www.googleapis.com/calendar/v3"
 google_oauth_states: set[str] = set()
 google_tokens: dict[str, dict] = {}
+pending_clickup_actions: dict[str, dict] = {}
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
@@ -75,9 +78,55 @@ async def public_config() -> dict[str, str | bool]:
     }
 
 
+def normalize_text(value: str) -> str:
+    return "".join(char for char in unicodedata.normalize("NFKD", value.lower()) if not unicodedata.combining(char))
+
+
+def chat_response(conversation_id: str, text: str) -> ChatResponse:
+    return ChatResponse(conversation_id=conversation_id, message_id=str(uuid4()), text=text, created_at=datetime.now(timezone.utc))
+
+
+async def prepare_clickup_action(conversation_id: str, text: str) -> ChatResponse | None:
+    normalized = normalize_text(text)
+    pending = pending_clickup_actions.get(conversation_id)
+    if pending and normalized in {"sim", "s", "confirmo", "pode", "pode criar", "ok"}:
+        client = require_clickup()
+        task = await client.create_task(
+            list_id=pending["list_id"], name=pending["name"], assignees=[pending["assignee_id"]]
+        )
+        pending_clickup_actions.pop(conversation_id, None)
+        return chat_response(conversation_id, f"Tarefa criada no ClickUp com sucesso: {task.get('name', pending['name'])}.\\n{task.get('url', '')}")
+    if pending and normalized in {"nao", "não", "cancela", "cancelar"}:
+        pending_clickup_actions.pop(conversation_id, None)
+        return chat_response(conversation_id, "Tudo bem, não criei a tarefa.")
+
+    if not re.search(r"\\b(crie|criar|cria)\\b.*\\btarefa\\b", normalized) or "datelha" not in normalized:
+        return None
+    client = require_clickup()
+    lists = await client.get_lists_for_workspace()
+    target_lists = [item for item in lists if normalize_text(item.get("folder", {}).get("name", "")) == "datelha"]
+    list_item = next((item for item in target_lists if "trafego" in normalize_text(item.get("name", ""))), None)
+    if not list_item:
+        return chat_response(conversation_id, "Não encontrei uma lista de tráfego dentro do cliente Datelha.")
+    match = re.search(r"\\bcomo\\s+(.+?)\\s+(?:tendo|com)\\s+(?:o\\s+)?diego(?:\\s+damacena)?", normalized)
+    if not match:
+        return chat_response(conversation_id, f"Encontrei a lista {list_item['name']} do cliente Datelha. Qual deve ser o título da tarefa?")
+    name = match.group(1).strip().rstrip(".,")
+    members = await client.get_members(await client.get_workspace_id())
+    diego = next((item for item in members if "diego" in normalize_text(item.get("user", {}).get("username", "") + " " + item.get("user", {}).get("email", "") + " " + item.get("user", {}).get("initials", ""))), None)
+    if not diego:
+        return chat_response(conversation_id, "Encontrei a tarefa, mas não localizei Diego Damacena como membro do Workspace.")
+    assignee_id = str(diego.get("user", {}).get("id"))
+    pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "name": name, "assignee_id": assignee_id}
+    return chat_response(conversation_id, f"Encontrei:\\nCliente: Datelha\\nLista: {list_item['name']}\\nTítulo: {name}\\nResponsável: Diego Damacena\\n\\nPosso criar essa tarefa?")
+
+
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
+    action_response = await prepare_clickup_action(conversation_id, payload.text)
+    if action_response:
+        return action_response
     provider = model = None
     try:
         history = conversation_histories.setdefault(conversation_id, [])
