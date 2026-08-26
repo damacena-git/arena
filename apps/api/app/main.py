@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import re
 from secrets import token_urlsafe
 import unicodedata
@@ -68,6 +69,7 @@ async def public_config() -> dict[str, str | bool]:
     return {
         "app_name": settings.app_name,
         "user_name": settings.user_name,
+        "user_timezone": settings.user_timezone,
         "environment": settings.environment,
         "ai_provider": settings.ai_provider,
         "groq_configured": bool(settings.groq_api_key),
@@ -84,6 +86,40 @@ def normalize_text(value: str) -> str:
 
 def chat_response(conversation_id: str, text: str) -> ChatResponse:
     return ChatResponse(conversation_id=conversation_id, message_id=str(uuid4()), text=text, created_at=datetime.now(timezone.utc))
+
+
+async def prepare_google_read(conversation_id: str, text: str) -> ChatResponse | None:
+    normalized = normalize_text(text)
+    if not any(word in normalized for word in ("compromisso", "agenda", "calendario")) or "hoje" not in normalized:
+        return None
+    access_token = await google_access_token()
+    if not access_token:
+        return chat_response(conversation_id, "Ainda não estou conectado à sua agenda. Vá em Configuração e clique em Conectar agenda para eu consultar seus compromissos.")
+    try:
+        local_zone = ZoneInfo(settings.user_timezone)
+    except Exception:
+        local_zone = timezone.utc
+    now = datetime.now(local_zone)
+    end = now + timedelta(days=1)
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(
+            f"{GOOGLE_CALENDAR_URL}/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"timeMin": now.isoformat(), "timeMax": end.isoformat(), "maxResults": 50, "singleEvents": "true", "orderBy": "startTime"},
+        )
+    if response.status_code >= 400:
+        return chat_response(conversation_id, f"Não consegui consultar sua agenda agora (Google Calendar HTTP {response.status_code}).")
+    events = response.json().get("items", [])
+    if not events:
+        return chat_response(conversation_id, "Você não tem compromissos na agenda para hoje.")
+    lines = [f"Você tem {len(events)} compromisso(s) hoje:"]
+    for event in events:
+        start_data = event.get("start", {})
+        start = start_data.get("dateTime", start_data.get("date", ""))
+        if "T" in start:
+            start = start.split("T", 1)[1][:5]
+        lines.append(f"• {start} — {event.get('summary', 'Sem título')}")
+    return chat_response(conversation_id, "\\n".join(lines))
 
 
 async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse | None:
@@ -154,6 +190,9 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
+    google_response = await prepare_google_read(conversation_id, payload.text)
+    if google_response:
+        return google_response
     read_response = await prepare_clickup_read(conversation_id, payload.text)
     if read_response:
         return read_response
