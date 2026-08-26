@@ -47,8 +47,22 @@ class ClickUpClient:
         return data.get("folders", [])
 
     async def get_lists(self, workspace_id: str) -> list[dict]:
-        data = await self._request("GET", f"/team/{workspace_id}/list")
-        return data.get("lists", [])
+        """Retorna listas de espaços com e sem pastas do workspace.
+
+        A API do ClickUp não possui um endpoint /team/{id}/list. As listas
+        ficam abaixo de cada space ou folder.
+        """
+        spaces_data = await self._request("GET", f"/team/{workspace_id}/space", params={"archived": "false"})
+        lists: list[dict] = []
+        for space in spaces_data.get("spaces", []):
+            space_id = space["id"]
+            direct = await self._request("GET", f"/space/{space_id}/list", params={"archived": "false"})
+            lists.extend(direct.get("lists", []))
+            folders_data = await self._request("GET", f"/space/{space_id}/folder", params={"archived": "false"})
+            for folder in folders_data.get("folders", []):
+                folder_lists = await self._request("GET", f"/folder/{folder['id']}/list", params={"archived": "false"})
+                lists.extend(folder_lists.get("lists", []))
+        return lists
 
     async def get_tasks(self, list_id: str) -> list[dict]:
         data = await self._request("GET", f"/list/{list_id}/task")

@@ -4,9 +4,9 @@ from uuid import uuid4
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .ai import AIClient, AIProviderError
@@ -33,6 +33,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(ClickUpError)
+async def clickup_exception_handler(request: Request, exc: ClickUpError):
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 class ChatMessage(BaseModel):
