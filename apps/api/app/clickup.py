@@ -95,7 +95,7 @@ class ClickUpClient:
         if priority:
             payload["priority"] = priority
         if due_dates:
-            payload["due_dates"] = due_dates
+            payload["due_date"] = due_dates
         if assignees:
             payload["assignees"] = [int(assignee) for assignee in assignees]
         if tags:
@@ -121,7 +121,7 @@ class ClickUpClient:
         if priority is not None:
             payload["priority"] = priority
         if due_dates is not None:
-            payload["due_dates"] = due_dates
+            payload["due_date"] = due_dates
         if assignees is not None:
             payload["assignees"] = assignees
         if tags is not None:

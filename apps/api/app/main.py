@@ -158,33 +158,55 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
     if pending and normalized in {"sim", "s", "confirmo", "pode", "pode criar", "ok"}:
         client = require_clickup()
         task = await client.create_task(
-            list_id=pending["list_id"], name=pending["name"], assignees=[pending["assignee_id"]]
+            list_id=pending["list_id"], name=pending["name"],
+            assignees=[pending["assignee_id"]], due_dates=pending.get("due_date"),
         )
         pending_clickup_actions.pop(conversation_id, None)
-        return chat_response(conversation_id, f"Tarefa criada no ClickUp com sucesso: {task.get('name', pending['name'])}.\\n{task.get('url', '')}")
-    if pending and normalized in {"nao", "não", "cancela", "cancelar"}:
+        return chat_response(conversation_id, f"Tarefa criada no ClickUp com sucesso: {task.get('name', pending['name'])}.\n{task.get('url', '')}")
+    if pending and normalized in {"nao", "cancela", "cancelar"}:
         pending_clickup_actions.pop(conversation_id, None)
         return chat_response(conversation_id, "Tudo bem, não criei a tarefa.")
 
-    if not re.search(r"\\b(crie|criar|cria)\\b.*\\btarefa\\b", normalized) or "datelha" not in normalized:
+    if "tarefa" not in normalized or not re.search(r"\b(crie|criar|cria|criei)\b", normalized):
         return None
     client = require_clickup()
     lists = await client.get_lists_for_workspace()
-    target_lists = [item for item in lists if normalize_text(item.get("folder", {}).get("name", "")) == "datelha"]
-    list_item = next((item for item in target_lists if "trafego" in normalize_text(item.get("name", ""))), None)
+    requested_list = re.search(r"lista\s+(?:a\s+)?(.+?)(?:\.|,|\s+e\s+o\s+(?:titulo|título)|$)", normalized)
+    requested_name = requested_list.group(1).strip() if requested_list else ""
+    list_item = None
+    for item in lists:
+        item_name = normalize_text(item.get("name", "")).strip()
+        folder_name = normalize_text(item.get("folder", {}).get("name", "")).strip()
+        if requested_name and (requested_name == item_name or requested_name in item_name or item_name in requested_name):
+            if "datelha" not in normalized or folder_name == "datelha":
+                list_item = item
+                break
     if not list_item:
-        return chat_response(conversation_id, "Não encontrei uma lista de tráfego dentro do cliente Datelha.")
-    match = re.search(r"\\bcomo\\s+(.+?)\\s+(?:tendo|com)\\s+(?:o\\s+)?diego(?:\\s+damacena)?", normalized)
-    if not match:
-        return chat_response(conversation_id, f"Encontrei a lista {list_item['name']} do cliente Datelha. Qual deve ser o título da tarefa?")
-    name = match.group(1).strip().rstrip(".,")
+        return chat_response(conversation_id, f"Não encontrei a lista {requested_name or 'solicitada'} no ClickUp.")
+    title_match = re.search(r"(?:titulo|título)\s+(?:da\s+tarefa\s+)?(?:sera|será)\s+(.+?)(?:\.|$)", normalized)
+    if not title_match:
+        title_match = re.search(r"\bcomo\s+(.+?)\s+(?:tendo|com)\s+(?:o\s+)?(?:diego|eu)\b", normalized)
+    if not title_match:
+        return chat_response(conversation_id, f"Encontrei a lista {list_item['name']}. Qual deve ser o título da tarefa?")
+    name = title_match.group(1).strip().rstrip(".,")
     members = await client.get_members(await client.get_workspace_id())
-    diego = next((item for item in members if "diego" in normalize_text(item.get("user", {}).get("username", "") + " " + item.get("user", {}).get("email", "") + " " + item.get("user", {}).get("initials", ""))), None)
+    diego = next((item for item in members if "diego" in normalize_text(str(item.get("user", {}).get("username", "")) + " " + str(item.get("user", {}).get("email", "")) + " " + str(item.get("user", {}).get("initials", "")))), None)
     if not diego:
-        return chat_response(conversation_id, "Encontrei a tarefa, mas não localizei Diego Damacena como membro do Workspace.")
+        return chat_response(conversation_id, "Encontrei a tarefa, mas não localizei Diego como membro do Workspace.")
+    due_date = None
+    time_match = re.search(r"hoje\s+(?:as|às)\s+(\d{1,2})(?:\s*:\s*(\d{2}))?", normalized)
+    if time_match:
+        try:
+            local_zone = ZoneInfo(settings.user_timezone)
+            local_now = datetime.now(local_zone)
+            due = local_now.replace(hour=int(time_match.group(1)), minute=int(time_match.group(2) or 0), second=0, microsecond=0)
+            due_date = str(int(due.timestamp() * 1000))
+        except (ValueError, KeyError):
+            due_date = None
     assignee_id = str(diego.get("user", {}).get("id"))
-    pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "name": name, "assignee_id": assignee_id}
-    return chat_response(conversation_id, f"Encontrei:\\nCliente: Datelha\\nLista: {list_item['name']}\\nTítulo: {name}\\nResponsável: Diego Damacena\\n\\nPosso criar essa tarefa?")
+    pending_clickup_actions[conversation_id] = {"list_id": list_item["id"], "name": name, "assignee_id": assignee_id, "due_date": due_date}
+    due_label = f"\nPrazo: hoje às {time_match.group(1)}:{time_match.group(2) or '00'}" if time_match else ""
+    return chat_response(conversation_id, f"Encontrei:\nCliente: {list_item.get('folder', {}).get('name', 'não informado')}\nLista: {list_item['name']}\nTítulo: {name}\nResponsável: Diego Damacena{due_label}\n\nPosso criar essa tarefa?")
 
 
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
@@ -235,6 +257,10 @@ async def send_audio_message(
     current_conversation_id = conversation_id or str(uuid4())
     try:
         transcript = await ai_client.transcribe(file.filename or "audio", content, file.content_type or "")
+        action_response = await prepare_clickup_action(current_conversation_id, transcript)
+        if action_response:
+            action_response.transcription = transcript
+            return action_response
         history = conversation_histories.setdefault(current_conversation_id, [])
         ai_reply = await ai_client.complete(transcript, history)
         reply, provider, model = ai_reply.text, ai_reply.provider, ai_reply.model
