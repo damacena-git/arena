@@ -167,6 +167,8 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
         pending_clickup_actions.pop(conversation_id, None)
         return chat_response(conversation_id, "Tudo bem, não criei a tarefa.")
 
+    if "tarefa" not in normalized or not re.search(r"\b(crie|criar|cria|criei)\b", normalized):
+        return None
     client = require_clickup()
     lists = await client.get_lists_for_workspace()
     list_item = None
