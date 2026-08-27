@@ -4,12 +4,20 @@ import './styles.css'
 
 type Message = { role: 'assistant' | 'user'; text: string; transcription?: string }
 type Config = { app_name: string; user_name?: string; environment: string; ai_provider: string; groq_configured: boolean; openrouter_configured: boolean; groq_model?: string; openrouter_model?: string; groq_transcription_model?: string }
+type TTSVoice = { name: string; display_name: string; gender: string; locale: string; style_list?: string[] }
+type TTSProvider = 'browser' | 'edge'
 
 function App() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [recording, setRecording] = useState(false)
   const [voiceEnabled, setVoiceEnabled] = useState(true)
+  const [ttsProvider, setTtsProvider] = useState<TTSProvider>('edge')
+  const [ttsVoices, setTtsVoices] = useState<TTSVoice[]>([])
+  const [selectedTtsVoice, setSelectedTtsVoice] = useState<string>('pt-BR-FranciscaNeural')
+  const [ttsLoading, setTtsLoading] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const audioChunks = useRef<Blob[]>([])
   const [view, setView] = useState<'chat' | 'settings' | 'clickup'>('chat')
@@ -33,6 +41,7 @@ function App() {
       .then(setConfig)
       .catch(() => undefined)
     refreshClickupStatus()
+    loadTTSVoices()
   }, [])
 
   async function refreshClickupStatus() {
@@ -88,18 +97,104 @@ function App() {
     }
   }
 
+  function stopSpeaking() {
+    // Para Edge TTS
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause()
+      currentAudioRef.current = null
+    }
+    // Para Browser TTS
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+    setIsSpeaking(false)
+  }
+
   function speak(text: string) {
-    if (!voiceEnabled || !('speechSynthesis' in window)) return
+    if (!voiceEnabled) return
+    stopSpeaking() // Para qualquer fala anterior
+    setIsSpeaking(true)
+    if (ttsProvider === 'edge') {
+      speakWithEdgeTTS(text)
+    } else {
+      speakWithBrowser(text)
+    }
+  }
+
+  function speakWithBrowser(text: string) {
+    if (!('speechSynthesis' in window)) return
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'pt-BR'
     utterance.rate = 0.96
     utterance.pitch = 1.06
+    utterance.onend = () => setIsSpeaking(false)
+    utterance.onerror = () => setIsSpeaking(false)
     const voices = window.speechSynthesis.getVoices()
     const feminineVoice = voices.find((voice) => /pt[-_]BR/i.test(voice.lang) && /female|feminina|maria|francisca|luciana|fernanda|google português|brasil/i.test(voice.name))
       || voices.find((voice) => /pt[-_]BR/i.test(voice.lang))
     if (feminineVoice) utterance.voice = feminineVoice
     window.speechSynthesis.speak(utterance)
+  }
+
+  async function speakWithEdgeTTS(text: string) {
+    try {
+      const response = await fetch('/api/v1/tts/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice: selectedTtsVoice,
+          rate: '+0%',
+          volume: '+0%',
+          pitch: '+0Hz',
+        }),
+      })
+      const data = await response.json()
+      if (data.success && data.audio_base64) {
+        const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`)
+        currentAudioRef.current = audio
+        audio.onended = () => {
+          setIsSpeaking(false)
+          currentAudioRef.current = null
+        }
+        audio.onerror = () => {
+          setIsSpeaking(false)
+          currentAudioRef.current = null
+        }
+        audio.play()
+      } else {
+        setIsSpeaking(false)
+      }
+    } catch {
+      // Fallback para browser TTS
+      speakWithBrowser(text)
+    }
+  }
+
+  async function loadTTSVoices() {
+    try {
+      setTtsLoading(true)
+      const response = await fetch('/api/v1/tts/voices/all')
+      const data = await response.json()
+      setTtsVoices(data.voices || [])
+      // Prefere Francisca como padrão, senão a primeira voz pt-BR feminina
+      const voices = data.voices || []
+      const francisca = voices.find((v: TTSVoice) => v.name === 'pt-BR-FranciscaNeural')
+      if (francisca) {
+        setSelectedTtsVoice(francisca.name)
+      } else {
+        // Fallback: procura qualquer voz pt-BR feminina
+        const ptbrFemale = voices.find((v: TTSVoice) => v.locale === 'pt-BR' && v.gender === 'Female')
+        if (ptbrFemale) setSelectedTtsVoice(ptbrFemale.name)
+      }
+    } catch (error) {
+      console.error('Erro ao carregar vozes TTS:', error)
+      // Mantém o padrão pt-BR-FranciscaNeural mesmo se falhar
+      setSelectedTtsVoice('pt-BR-FranciscaNeural')
+    } finally {
+      setTtsLoading(false)
+    }
   }
 
   async function sendAudio(file: Blob, filename: string) {
@@ -185,15 +280,17 @@ function App() {
         setSelectedList={setClickupFormList}
         onCreate={createClickupTask}
         error={clickupError}
-      /> : view === 'settings' ? <Settings config={config} clickupConnected={clickupConnected} /> : <>
-        <header className="topbar"><div><p className="eyebrow">CENTRAL DE COMANDO</p><h1>Bom dia, {config?.user_name || 'Diego'}</h1></div><div className="avatar">E</div></header>
-        <div className="conversation">
-          <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
-          <div className="messages">{messages.map((message, index) => <div key={index} className={`message ${message.role}`}><span>{message.transcription && <small className="transcription">Transcrição: {message.transcription}</small>}{message.text}</span></div>)}</div>
-        </div>
-        <form className="composer" onSubmit={sendMessage}><button type="button" className={`voice-button ${voiceEnabled ? 'enabled' : ''}`} onClick={() => setVoiceEnabled((enabled) => !enabled)} title="Ativar ou silenciar respostas faladas">{voiceEnabled ? '🔊 Voz' : '🔇 Voz'}</button><button type="button" className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={sending}>{recording ? '■ Parar' : '● Gravar'}</button><label className="audio-button" title="Enviar arquivo de áudio">↥ Arquivo<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void sendAudio(file, file.name); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
-        <p className="hint">Clique em <strong>● Gravar</strong> para falar e receba a resposta em áudio. <strong>🔊 Voz</strong> liga/desliga a fala.</p>
-      </>}
+      /> : view === 'settings' ? <Settings config={config} clickupConnected={clickupConnected} ttsProvider={ttsProvider} setTtsProvider={setTtsProvider} ttsVoices={ttsVoices} selectedTtsVoice={selectedTtsVoice} setSelectedTtsVoice={setSelectedTtsVoice} ttsLoading={ttsLoading} /> : (
+        <>
+          <header className="topbar"><div><p className="eyebrow">CENTRAL DE COMANDO</p><h1>Bom dia, {config?.user_name || 'Diego'}</h1></div><div className="avatar">E</div></header>
+          <div className="conversation">
+            <div className="welcome"><div className="orb">✦</div><h2>Em que posso ajudar?</h2><p>Peça para organizar suas tarefas, notas e compromissos.</p><div className="suggestions"><button onClick={() => setInput('O que tenho para fazer hoje?')}>O que tenho para fazer hoje?</button><button onClick={() => setInput('Crie uma tarefa no ClickUp')}>Criar tarefa no ClickUp</button><button onClick={() => setInput('Salve uma nota no Notion')}>Salvar nota no Notion</button></div></div>
+            <div className="messages">{messages.map((message, index) => <div key={index} className={`message ${message.role}`}><span>{message.transcription && <small className="transcription">Transcrição: {message.transcription}</small>}{message.text}</span></div>)}</div>
+          </div>
+          <form className="composer" onSubmit={sendMessage}><button type="button" className={`voice-button ${voiceEnabled ? 'enabled' : ''}`} onClick={() => setVoiceEnabled((enabled) => !enabled)} title="Ativar ou silenciar respostas faladas">{voiceEnabled ? '🔊 Voz' : '🔇 Voz'}</button>{isSpeaking && <button type="button" className="stop-speak-button" onClick={stopSpeaking} title="Parar fala">■ Parar</button>}<button type="button" className={`record-button ${recording ? 'recording' : ''}`} onClick={toggleRecording} disabled={sending}>{recording ? '■ Parar' : '● Gravar'}</button><label className="audio-button" title="Enviar arquivo de áudio">↥ Arquivo<input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden onChange={(e) => { const file = e.target.files?.[0]; if (file) void sendAudio(file, file.name); e.currentTarget.value = '' }} /></label><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Fale com a Sofia..." aria-label="Mensagem"/><button disabled={sending || !input.trim()}>{sending ? '…' : 'Enviar'} <span>↗</span></button></form>
+          <p className="hint">Clique em <strong>● Gravar</strong> para falar e receba a resposta em áudio. <strong>🔊 Voz</strong> liga/desliga a fala.</p>
+        </>
+      )}
     </section>
   </main>
 }
@@ -202,8 +299,10 @@ function ClickupPanel({ connected, lists, tasks, statusLabel, taskName, setTaskN
   return <div className="settings-page"><p className="eyebrow">CLICKUP</p><h1>Tarefas</h1><p className="settings-lead">Gerencie suas listas e tarefas do ClickUp direto pela Sofia.</p><div className="settings-card"><div className="integration-row"><div><strong>Status da conexão</strong><small>{connected ? 'Conectado.' : 'Sem conexão ativa.'}</small></div><span className={`status-pill ${connected ? 'ok' : 'muted'}`}>{statusLabel}</span></div>{!connected ? <p className="settings-note">Adicione <strong>CLICKUP_API_KEY</strong> e <strong>CLICKUP_DEFAULT_TEAM_ID</strong> no .env para liberar essa tela.</p> : <><form className="composer" onSubmit={onCreate}><input value={taskName} onChange={(event) => setTaskName(event.target.value)} placeholder="Nova tarefa" /><select value={selectedList} onChange={(event) => setSelectedList(event.target.value)}>{lists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="submit" disabled={!taskName.trim()}>{statusLabel === 'Salvando' ? 'Salvando…' : 'Criar'}</button></form>{error && <p className="settings-note" style={{ color: '#f87171' }}>{error}</p>}<div className="task-list">{tasks.length ? tasks.map((item) => <div key={item.id} className="task-card"><strong>{item.name}</strong><small>{item.priority || ''}</small></div>) : <p className="settings-note">Nenhuma tarefa encontrada.</p>}</div></>}</div></div>
 }
 
-function Settings({ config, clickupConnected }: { config: Config | null; clickupConnected: boolean }) {
-  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="integration-row"><div><strong>Google Calendar</strong><small>Conecte sua agenda para consultar compromissos.</small></div><a className="connect-button" href="/api/v1/integrations/google/start">Conectar agenda</a></div><div className="integration-row"><div><strong>ClickUp</strong><small>Integração com listas e tarefas.</small></div><span className={`status-pill ${clickupConnected ? 'ok' : 'muted'}`}>{clickupConnected ? 'Conectado' : 'Desconectado'}</span></div><div className="setting-row"><span>Usuário</span><strong>{config?.user_name || 'Diego'}</strong></div><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
+function Settings({ config, clickupConnected, ttsProvider, setTtsProvider, ttsVoices, selectedTtsVoice, setSelectedTtsVoice, ttsLoading }: { config: Config | null; clickupConnected: boolean; ttsProvider: TTSProvider; setTtsProvider: (value: TTSProvider) => void; ttsVoices: TTSVoice[]; selectedTtsVoice: string; setSelectedTtsVoice: (value: string) => void; ttsLoading: boolean }) {
+  return <div className="settings-page"><p className="eyebrow">CONFIGURAÇÃO</p><h1>Inteligência da Sofia</h1><p className="settings-lead">Informações técnicas disponíveis apenas nesta área de administração.</p><div className="settings-card"><div className="integration-row"><div><strong>Google Calendar</strong><small>Conecte sua agenda para consultar compromissos.</small></div><a className="connect-button" href="/api/v1/integrations/google/start">Conectar agenda</a></div><div className="integration-row"><div><strong>ClickUp</strong><small>Integração com listas e tarefas.</small></div><span className={`status-pill ${clickupConnected ? 'ok' : 'muted'}`}>{clickupConnected ? 'Conectado' : 'Desconectado'}</span></div><div className="setting-row"><span>Usuário</span><strong>{config?.user_name || 'Diego'}</strong></div><div className="setting-row"><span>Provedor principal</span><strong>{config?.ai_provider || 'Carregando…'}</strong></div><div className="setting-row"><span>Groq</span><strong className={config?.groq_configured ? 'ok' : 'muted'}>{config?.groq_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>OpenRouter</span><strong className={config?.openrouter_configured ? 'ok' : 'muted'}>{config?.openrouter_configured ? 'Configurado' : 'Não configurado'}</strong></div><div className="setting-row"><span>Modelo de conversa Groq</span><strong>{config?.groq_model || 'llama-3.3-70b-versatile'}</strong></div><div className="setting-row"><span>Modelo de transcrição</span><strong>{config?.groq_transcription_model || 'whisper-large-v3-turbo'}</strong></div><div className="setting-row"><span>Ambiente</span><strong>{config?.environment || 'development'}</strong></div></div>
+
+<div className="settings-card" style={{marginTop: '1rem'}}><p className="eyebrow">TEXT-TO-SPEECH</p><p className="settings-lead">Configure como a Sofia fala com você.</p><div className="setting-row"><span>Provedor de voz</span><select value={ttsProvider} onChange={(e) => setTtsProvider(e.target.value as TTSProvider)} style={{padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', width: '100%', maxWidth: '200px'}}><option value="browser">🌐 Navegador (Web Speech API)</option><option value="edge">☁️ Edge TTS (Microsoft Neural Voices)</option></select></div>{ttsProvider === 'edge' && <div className="setting-row"><span>Voz</span><select value={selectedTtsVoice} onChange={(e) => setSelectedTtsVoice(e.target.value)} disabled={ttsLoading} style={{padding: '0.5rem', borderRadius: '0.5rem', border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', width: '100%', maxWidth: '300px'}}><option value="" disabled>Carregando vozes...</option>{!ttsLoading && ttsVoices.map((voice) => voice.locale === 'pt-BR' && <option key={voice.name} value={voice.name}>{voice.display_name || voice.name} ({voice.gender})</option>)}</select>{ttsLoading && <small style={{color: '#94a3b8'}}>Carregando vozes...</small>}</div>}</div><p className="settings-note">As chaves permanecem somente no backend e nunca são exibidas.</p></div>
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)

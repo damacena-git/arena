@@ -15,9 +15,11 @@ from pydantic import BaseModel, Field
 from .ai import AIClient, AIProviderError
 from .clickup import ClickUpClient, ClickUpError, get_clickup_client, require_clickup
 from .config import get_settings
+from .tts import TTSClient, get_tts_client
 
 settings = get_settings()
 ai_client = AIClient(settings)
+tts_client = get_tts_client()
 # Memória curta temporária; será substituída pela persistência no PostgreSQL.
 conversation_histories: dict[str, list[dict[str, str]]] = {}
 MAX_HISTORY_MESSAGES = 12
@@ -90,7 +92,7 @@ def chat_response(conversation_id: str, text: str) -> ChatResponse:
 
 async def prepare_google_read(conversation_id: str, text: str) -> ChatResponse | None:
     normalized = normalize_text(text)
-    if not any(word in normalized for word in ("compromisso", "agenda", "calendario")) or "hoje" not in normalized:
+    if not any(word in normalized for word in ("compromisso", "agenda", "calendario")) or not any(day in normalized for day in ("hoje", "amanha", "amanhã")):
         return None
     access_token = await google_access_token()
     if not access_token:
@@ -435,3 +437,65 @@ async def clickup_create_task(
 async def evolution_webhook(request: Request) -> dict[str, str]:
     await request.json()
     return {"status": "accepted"}
+
+
+# ==================== TTS Endpoints ====================
+
+
+class TTSRequest(BaseModel):
+    """Requisição para síntese de voz."""
+    text: str = Field(min_length=1, max_length=5000, description="Texto para sintetizar")
+    voice: str | None = Field(default=None, description="Voz a usar (ex: pt-BR-FranciscaNeural)")
+    rate: str = Field(default="+0%", description="Velocidade da fala (ex: +10%, -20%)")
+    volume: str = Field(default="+0%", description="Volume (ex: +10%, -20%)")
+    pitch: str = Field(default="+0Hz", description="Tom da voz (ex: +10Hz, -5Hz)")
+
+
+class TTSResponse(BaseModel):
+    """Resposta da síntese de voz."""
+    success: bool
+    voice: str
+    format: str = "mp3"
+    audio_base64: str | None = None
+    error: str | None = None
+
+
+@app.post("/api/v1/tts/synthesize", response_model=TTSResponse, tags=["tts"])
+async def tts_synthesize(payload: TTSRequest) -> TTSResponse:
+    """Sintetiza texto em áudio usando Edge TTS."""
+    import base64
+
+    try:
+        reply = await tts_client.synthesize(
+            text=payload.text,
+            voice=payload.voice,
+            rate=payload.rate,
+            volume=payload.volume,
+            pitch=payload.pitch,
+        )
+        audio_base64 = base64.b64encode(reply.audio_data).decode("utf-8")
+        return TTSResponse(
+            success=True,
+            voice=reply.voice,
+            format=reply.format,
+            audio_base64=audio_base64,
+        )
+    except Exception as exc:
+        return TTSResponse(
+            success=False,
+            voice=payload.voice or tts_client.default_voice,
+            error=str(exc),
+        )
+
+
+@app.get("/api/v1/tts/voices", tags=["tts"])
+async def tts_voices() -> dict:
+    """Lista vozes disponíveis para TTS."""
+    return {"voices": TTSClient.list_voices()}
+
+
+@app.get("/api/v1/tts/voices/all", tags=["tts"])
+async def tts_all_voices() -> dict:
+    """Lista todas as vozes do Edge TTS (requer conexão com internet)."""
+    voices = await TTSClient.list_all_edge_voices()
+    return {"voices": voices}

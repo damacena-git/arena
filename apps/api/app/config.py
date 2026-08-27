@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,10 +31,12 @@ class Settings(BaseSettings):
     evolution_api_key: str = ""
     evolution_instance: str = ""
     clickup_api_key: str = ""
-    clickup_default_team_id: str = ""
+    clickup_default_team_id: str = Field(default="", alias="CLICKUP_TEAM_ID")
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google/callback"
+    # TTS
+    tts_default_voice: str = "pt-BR-FranciscaNeural"
 
     # Procura primeiro o .env na raiz do projeto, independentemente do diretório
     # a partir do qual o uvicorn foi iniciado.
