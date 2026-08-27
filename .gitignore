@@ -6,3 +6,7 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+# Token files - never commit these
+.tokens.json
+.token_key
+.google_tokens.json

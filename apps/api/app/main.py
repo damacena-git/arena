@@ -16,6 +16,7 @@ from .ai import AIClient, AIProviderError
 from .clickup import ClickUpClient, ClickUpError, get_clickup_client, require_clickup
 from .config import get_settings
 from .tts import TTSClient, get_tts_client
+from .token_manager import load_google_token, save_google_token
 
 settings = get_settings()
 ai_client = AIClient(settings)
@@ -40,6 +41,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_restore_tokens():
+    """Restaurar tokens salvos ao iniciar."""
+    saved_token = load_google_token("default")
+    if saved_token:
+        google_tokens["default"] = saved_token
 
 
 @app.exception_handler(ClickUpError)
@@ -155,6 +164,84 @@ async def prepare_clickup_read(conversation_id: str, text: str) -> ChatResponse 
     return chat_response(conversation_id, "\n".join(lines))
 
 
+async def prepare_google_action(conversation_id: str, text: str) -> ChatResponse | None:
+    normalized = normalize_text(text)
+    pending = pending_google_actions.get(conversation_id)
+    if pending and pending.get("awaiting_confirmation") and normalized in {"sim", "s", "confirmo", "pode", "pode criar", "ok", "sim pode criar"}:
+        access_token = await google_access_token()
+        if not access_token:
+            return chat_response(conversation_id, "Não consegui acessar sua agenda. Reconecte em Configuração.")
+        try:
+            local_zone = ZoneInfo(settings.user_timezone)
+        except Exception:
+            local_zone = timezone.utc
+
+        start_dt = datetime.fromisoformat(pending["start_datetime"])
+        end_dt = datetime.fromisoformat(pending["end_datetime"])
+
+        event_body = {
+            "summary": pending["title"],
+            "start": {"dateTime": start_dt.isoformat()},
+            "end": {"dateTime": end_dt.isoformat()},
+            "reminders": {"useDefault": False, "overrides": [{"method": "notification", "minutes": 15}]}
+        }
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                f"{GOOGLE_CALENDAR_URL}/calendars/primary/events",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=event_body,
+            )
+
+        pending_google_actions.pop(conversation_id, None)
+        if response.status_code < 400:
+            event = response.json()
+            return chat_response(conversation_id, f"Marcado! {pending['title']} em {start_dt.strftime('%d/%m às %H:%M')}")
+        else:
+            return chat_response(conversation_id, f"Não consegui marcar no Google Calendar (HTTP {response.status_code}).")
+
+    if pending and pending.get("awaiting_confirmation") and normalized in {"nao", "cancela", "cancelar", "nao pode", "nao marcar"}:
+        pending_google_actions.pop(conversation_id, None)
+        return chat_response(conversation_id, "Tudo bem, não marquei nada.")
+
+    if not any(word in normalized for word in ("marque", "agende", "lembrete", "crie", "criar")):
+        return None
+    if not any(word in normalized for word in ("hoje", "amanha", "amanhã")):
+        return None
+    if not re.search(r"(\d{1,2})(?:\s*[h:]\s*(\d{2})?)?", normalized):
+        return None
+
+    access_token = await google_access_token()
+    if not access_token:
+        return chat_response(conversation_id, "Ainda não estou conectado à sua agenda. Vá em Configuração e clique em Conectar agenda.")
+
+    try:
+        local_zone = ZoneInfo(settings.user_timezone)
+    except Exception:
+        local_zone = timezone.utc
+
+    now = datetime.now(local_zone)
+    time_match = re.search(r"(\d{1,2})(?:\s*[h:]\s*(\d{2})?)?", normalized)
+    hour = int(time_match.group(1))
+    minute = int(time_match.group(2)) if time_match.group(2) else 0
+
+    start_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    end_dt = start_dt + timedelta(minutes=15)
+
+    # Extrair título — procura após hora (14h, 10:30, etc)
+    title_match = re.search(r"(?:as|às)\s+\d{1,2}(?:h\d{0,2}|:\d{2})?\s+(.+)$", text, re.IGNORECASE)
+    title = title_match.group(1).strip() if title_match else "Lembrete"
+
+    pending_google_actions[conversation_id] = {
+        "title": title,
+        "start_datetime": start_dt.isoformat(),
+        "end_datetime": end_dt.isoformat(),
+        "awaiting_confirmation": True
+    }
+
+    return chat_response(conversation_id, f"Vou marcar: {title}\nHorário: {start_dt.strftime('%d/%m às %H:%M')}\n\nPosso marcar?")
+
+
 async def prepare_clickup_action(conversation_id: str, text: str) -> ChatResponse | None:
     normalized = normalize_text(text)
     pending = pending_clickup_actions.get(conversation_id)
@@ -224,6 +311,9 @@ async def prepare_clickup_action(conversation_id: str, text: str) -> ChatRespons
 @app.post("/api/v1/chat/messages", response_model=ChatResponse, tags=["chat"])
 async def send_chat_message(payload: ChatMessage) -> ChatResponse:
     conversation_id = payload.conversation_id or str(uuid4())
+    google_action_response = await prepare_google_action(conversation_id, payload.text)
+    if google_action_response:
+        return google_action_response
     google_response = await prepare_google_read(conversation_id, payload.text)
     if google_response:
         return google_response
@@ -331,12 +421,28 @@ async def google_callback(code: str | None = None, state: str | None = None, err
     token = response.json()
     token["expires_at"] = datetime.now(timezone.utc).timestamp() + token.get("expires_in", 3600)
     google_tokens["default"] = token
+    save_google_token("default", token)
     return RedirectResponse(url=f"{settings.app_url}/?google=connected", status_code=303)
 
 
 @app.get("/api/v1/integrations/google/status", tags=["integrations"])
 async def google_status(error: str | None = None) -> dict[str, bool | str | None]:
     return {"connected": "default" in google_tokens, "error": error}
+
+
+@app.post("/api/v1/integrations/google/test-token", tags=["integrations"])
+async def google_test_token() -> dict[str, str]:
+    """Apenas para testes — injeta um token fake."""
+    from datetime import datetime, timezone
+    fake_token = {
+        "access_token": "ya29.a0AfH6SMBx-test-token-for-testing-only",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "1//fake-refresh-token",
+        "expires_at": datetime.now(timezone.utc).timestamp() + 3600
+    }
+    google_tokens["default"] = fake_token
+    return {"status": "Token injetado para testes"}
 
 
 async def google_access_token() -> str | None:
@@ -357,6 +463,7 @@ async def google_access_token() -> str | None:
             refreshed["refresh_token"] = token["refresh_token"]
             refreshed["expires_at"] = datetime.now(timezone.utc).timestamp() + refreshed.get("expires_in", 3600)
             google_tokens["default"] = refreshed
+            save_google_token("default", refreshed)
     return google_tokens["default"].get("access_token")
 
 
