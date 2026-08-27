@@ -1,0 +1,56 @@
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+class Settings(BaseSettings):
+    app_name: str = "Sofia"
+    user_name: str = "Diego"
+    user_timezone: str = "America/Sao_Paulo"
+    environment: str = "development"
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    database_url: str = "postgresql+asyncpg://sofia:sofia@localhost:5432/sofia"
+    redis_url: str = "redis://localhost:6379/0"
+    cors_origins: str = "http://localhost:5173"
+    ai_provider: str = "groq"
+    ai_fallback_provider: str = "openrouter"
+    ai_timeout_seconds: float = 30.0
+    app_url: str = "http://localhost:5173"
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_transcription_model: str = "whisper-large-v3-turbo"
+    openrouter_model: str = "openrouter/free"
+    groq_api_key: str = ""
+    openrouter_api_key: str = ""
+    evolution_api_url: str = ""
+    evolution_api_key: str = ""
+    evolution_instance: str = ""
+    clickup_api_key: str = ""
+    clickup_default_team_id: str = Field(default="", alias="CLICKUP_TEAM_ID")
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/integrations/google/callback"
+    # TTS
+    tts_default_voice: str = "pt-BR-FranciscaNeural"
+
+    # Procura primeiro o .env na raiz do projeto, independentemente do diretório
+    # a partir do qual o uvicorn foi iniciado.
+    model_config = SettingsConfigDict(
+        env_file=(PROJECT_ROOT / ".env", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
