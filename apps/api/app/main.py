@@ -29,6 +29,7 @@ GOOGLE_CALENDAR_URL = "https://www.googleapis.com/calendar/v3"
 google_oauth_states: set[str] = set()
 google_tokens: dict[str, dict] = {}
 pending_clickup_actions: dict[str, dict] = {}
+pending_google_actions: dict[str, dict] = {}
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
